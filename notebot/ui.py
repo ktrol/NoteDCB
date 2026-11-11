@@ -16,7 +16,7 @@ import discord
 
 from .card import Card, FolderRow, TaskRow, render_card
 from .store import (
-    MAX_FOLDER_NAME, MAX_LINES_PER_ADD, Folder, FolderExistsError,
+    COLOR_KEYS, ICON_KEYS, MAX_FOLDER_NAME, MAX_LINES_PER_ADD, Folder, FolderExistsError,
     FolderLimitError, Note, NoteStore, split_lines,
 )
 
@@ -28,6 +28,23 @@ PAGE = 25            # tasks per page (a select menu holds at most 25 options)
 VIEW_TIMEOUT = 840   # seconds; interaction tokens expire after 15 minutes
 
 Callback = Callable[[discord.Interaction], Awaitable[None]]
+
+# Optional folder styling: key -> (label, emoji for Discord menus)
+ICON_CHOICES = {
+    "folder": ("Folder", "📁"), "star": ("Star", "⭐"), "flag": ("Flag", "🚩"),
+    "people": ("People", "👥"), "calendar": ("Calendar", "📅"), "chat": ("Chat", "💬"),
+    "target": ("Target", "🎯"), "heart": ("Heart", "❤️"),
+}
+COLOR_CHOICES = {
+    "gold": ("Gold (default)", "💛"), "teal": ("Teal", "🩵"), "blue": ("Blue", "💙"),
+    "purple": ("Purple", "💜"), "pink": ("Pink", "🩷"), "red": ("Red", "❤️"),
+    "orange": ("Orange", "🧡"), "green": ("Green", "💚"), "grey": ("Grey", "🩶"),
+}
+assert set(ICON_CHOICES) == set(ICON_KEYS) and set(COLOR_CHOICES) == set(COLOR_KEYS)
+
+
+def folder_emoji(icon: Optional[str]) -> str:
+    return ICON_CHOICES.get(icon or "folder", ICON_CHOICES["folder"])[1]
 
 
 # ---------------------------------------------------------------- formatting
@@ -168,7 +185,7 @@ class NotesView(discord.ui.View):
         self.store, self.guild_id = store, guild_id
         self.folder_id: Optional[int] = None
         self.page = 0
-        self.mode = "view"   # view | remove | confirm_delete
+        self.mode = "view"   # view | remove | style | confirm_delete
         self.message: Optional[discord.Message] = None
         self._card: Optional[Card] = None
 
@@ -261,18 +278,18 @@ class NotesView(discord.ui.View):
         embed = discord.Embed(title="📋 Meeting notes", colour=ACCENT)
         if folders:
             embed.description = "\n".join(
-                f"📁 **{clip(f.name, 40)}**  `{progress_bar(f.done, f.total, 8)}`  {f.done}/{f.total}"
+                f"{folder_emoji(f.icon)} **{clip(f.name, 40)}**  `{progress_bar(f.done, f.total, 8)}`  {f.done}/{f.total}"
                 for f in folders)
             done = sum(f.done for f in folders)
             total = sum(f.total for f in folders)
             embed.set_footer(text=f"{len(folders)} folder(s) • {done}/{total} tasks complete")
             self._card = Card(
                 "Meeting notes", f"{len(folders)} folder(s)", done, total,
-                [FolderRow(f.name, f.done, f.total) for f in folders])
+                [FolderRow(f.name, f.done, f.total, f.icon, f.color) for f in folders])
             self._select(
                 "Open a folder…",
                 [discord.SelectOption(label=clip(f.name, 100), value=str(f.id),
-                                      description=f"{f.done}/{f.total} done", emoji="📁")
+                                      description=f"{f.done}/{f.total} done", emoji=folder_emoji(f.icon))
                  for f in folders],
                 row=0, cb=self._on_open_folder)
         else:
@@ -303,7 +320,7 @@ class NotesView(discord.ui.View):
 
         removing = self.mode == "remove"
         embed = discord.Embed(
-            title=("🗑️ Remove tasks - " if removing else "📁 ") + clip(folder.name, 200),
+            title=("🗑️ Remove tasks - " if removing else folder_emoji(folder.icon) + " ") + clip(folder.name, 200),
             colour=WARN if removing else ACCENT)
         embed.description = ("\n".join(task_line(n) for n in chunk) if chunk else
                              "*This folder is empty. Press **Add tasks** to fill it.*")
@@ -311,7 +328,9 @@ class NotesView(discord.ui.View):
             name="Progress",
             value=f"`{progress_bar(folder.done, folder.total)}`  {folder.done}/{folder.total} complete",
             inline=False)
+        styling = self.mode == "style"
         hint = ("Pick tasks below to delete them" if removing
+                else "Choose an icon and color for this folder" if styling
                 else "Tick tasks in the menu to check them off")
         embed.set_footer(text=f"Page {self.page + 1}/{pages} • {hint}")
         self._card = Card(
@@ -320,7 +339,28 @@ class NotesView(discord.ui.View):
             f"{folder.done} of {folder.total} tasks complete",
             folder.done, folder.total,
             [TaskRow(n.text, n.done) for n in chunk],
-            empty_text="No tasks yet - press Add tasks")
+            empty_text="No tasks yet - press Add tasks",
+            icon=folder.icon or ("folder" if folder.color or styling else None),
+            color=folder.color)
+
+        if styling:
+            self._select(
+                "Choose an icon…",
+                [discord.SelectOption(label=lbl, value=key, emoji=emo,
+                                      default=key == (folder.icon or "folder"))
+                 for key, (lbl, emo) in ICON_CHOICES.items()],
+                row=0, cb=self._on_icon_select)
+            self._select(
+                "Choose a color…",
+                [discord.SelectOption(label=lbl, value=key, emoji=emo,
+                                      default=key == (folder.color or "gold"))
+                 for key, (lbl, emo) in COLOR_CHOICES.items()],
+                row=1, cb=self._on_color_select)
+            self._button("Reset to default", self._on_reset_style, row=2, emoji="↩️",
+                         disabled=not (folder.icon or folder.color))
+            self._button("Done", self._on_cancel, row=2,
+                         style=discord.ButtonStyle.success, emoji="✅")
+            return embed
 
         if removing:
             if chunk:
@@ -345,6 +385,7 @@ class NotesView(discord.ui.View):
         self._button("Search", self._on_search, row=1, emoji="🔎")
         self._button("Clear done", self._on_clear_done, row=1, emoji="🧹",
                      disabled=folder.done == 0)
+        self._button("Style", self._on_style, row=1, emoji="🎨")
         self._button("", self._on_prev, row=2, emoji="◀️", disabled=self.page == 0)
         self._button("", self._on_next, row=2, emoji="▶️", disabled=self.page >= pages - 1)
         self._button("Folders", self._on_home, row=2, emoji="⬅️")
@@ -403,6 +444,32 @@ class NotesView(discord.ui.View):
             [n.id for n in chunk if n.id in chosen],
             [n.id for n in chunk if n.id not in chosen],
             interaction.user.id)
+        await self.show(interaction)
+
+    async def _on_style(self, interaction: discord.Interaction) -> None:
+        self.mode = "style"
+        await self.show(interaction)
+
+    def _apply_style(self, icon: Optional[str], color: Optional[str], keep: str) -> None:
+        folder = self.store.get_folder(self.guild_id, self.folder_id)
+        if folder is None:
+            return
+        if keep == "color":
+            color = folder.color
+        elif keep == "icon":
+            icon = folder.icon
+        self.store.set_folder_style(self.guild_id, folder.id, icon, color)
+
+    async def _on_icon_select(self, interaction: discord.Interaction, values: list[str]) -> None:
+        self._apply_style(values[0], None, keep="color")
+        await self.show(interaction)
+
+    async def _on_color_select(self, interaction: discord.Interaction, values: list[str]) -> None:
+        self._apply_style(None, values[0], keep="icon")
+        await self.show(interaction)
+
+    async def _on_reset_style(self, interaction: discord.Interaction) -> None:
+        self._apply_style(None, None, keep="")
         await self.show(interaction)
 
     async def _on_remove_mode(self, interaction: discord.Interaction) -> None:

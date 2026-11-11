@@ -17,11 +17,17 @@ MAX_TASK_LEN = 500
 MAX_FOLDER_NAME = 40
 MAX_LINES_PER_ADD = 50
 
+# Optional folder look. None means "default" (gold folder).
+ICON_KEYS = ("folder", "star", "flag", "people", "calendar", "chat", "target", "heart")
+COLOR_KEYS = ("gold", "teal", "blue", "purple", "pink", "red", "orange", "green", "grey")
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS folders (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
     guild_id INTEGER NOT NULL,
     name     TEXT    NOT NULL COLLATE NOCASE,
+    icon     TEXT,
+    color    TEXT,
     UNIQUE (guild_id, name)
 );
 CREATE TABLE IF NOT EXISTS notes (
@@ -74,6 +80,8 @@ class Folder:
     name: str
     done: int
     total: int
+    icon: Optional[str] = None
+    color: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -100,7 +108,8 @@ def _note(row: sqlite3.Row) -> Note:
 
 
 def _folder(row: sqlite3.Row) -> Folder:
-    return Folder(row["id"], row["guild_id"], row["name"], row["done"], row["total"])
+    return Folder(row["id"], row["guild_id"], row["name"], row["done"], row["total"],
+                  row["icon"], row["color"])
 
 
 def _escape_like(term: str) -> str:
@@ -112,7 +121,7 @@ _NOTE_SELECT = (
     "JOIN folders f ON f.id = n.folder_id AND f.guild_id = n.guild_id"
 )
 _FOLDER_SELECT = (
-    "SELECT f.id, f.guild_id, f.name, COALESCE(SUM(n.done), 0) AS done, "
+    "SELECT f.id, f.guild_id, f.name, f.icon, f.color, COALESCE(SUM(n.done), 0) AS done, "
     "COUNT(n.id) AS total FROM folders f "
     "LEFT JOIN notes n ON n.folder_id = f.id AND n.guild_id = f.guild_id"
 )
@@ -123,6 +132,7 @@ class NoteStore:
         self._db = sqlite3.connect(path)
         self._db.row_factory = sqlite3.Row
         self._migrate_v1_if_needed()
+        self._add_style_columns_if_needed()
         self._db.executescript(SCHEMA)
         self._db.commit()
 
@@ -145,6 +155,13 @@ class NoteStore:
                     (row["guild_id"], row["id"], row["text"], folder.id, row["done"],
                      row["created_by"], row["created_at"], row["done_by"], row["done_at"]))
             self._db.execute("DROP TABLE notes_v1")
+
+    def _add_style_columns_if_needed(self) -> None:
+        cols = [r[1] for r in self._db.execute("PRAGMA table_info(folders)")]
+        if cols and "icon" not in cols:
+            with self._db:
+                self._db.execute("ALTER TABLE folders ADD COLUMN icon TEXT")
+                self._db.execute("ALTER TABLE folders ADD COLUMN color TEXT")
 
     # -- folders --------------------------------------------------------
     def _clean_name(self, name: str) -> str:
@@ -191,6 +208,19 @@ class NoteStore:
                     (name, guild_id, folder_id))
         except sqlite3.IntegrityError:
             raise FolderExistsError(name) from None
+        return self.get_folder(guild_id, folder_id) if cur.rowcount else None
+
+    def set_folder_style(self, guild_id: int, folder_id: int, icon: Optional[str],
+                         color: Optional[str]) -> Optional[Folder]:
+        """Set a folder's optional icon/color. None resets that part to default."""
+        if icon is not None and icon not in ICON_KEYS:
+            raise ValueError(f"unknown icon {icon!r}")
+        if color is not None and color not in COLOR_KEYS:
+            raise ValueError(f"unknown color {color!r}")
+        with self._db:
+            cur = self._db.execute(
+                "UPDATE folders SET icon = ?, color = ? WHERE guild_id = ? AND id = ?",
+                (icon, color, guild_id, folder_id))
         return self.get_folder(guild_id, folder_id) if cur.rowcount else None
 
     def delete_folder(self, guild_id: int, folder_id: int) -> int:

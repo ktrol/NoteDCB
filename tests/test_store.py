@@ -139,3 +139,40 @@ def test_migrates_v1_database(tmp_path):
     assert s.add(1, "new", 5).id == 3
     s.close()
     NoteStore(path).close()  # reopening a migrated db is a no-op
+
+
+def test_folder_style_is_optional_validated_and_resettable(store):
+    f = store.get_or_create_folder(1, "Team")
+    assert (f.icon, f.color) == (None, None)
+    f = store.set_folder_style(1, f.id, "people", "purple")
+    assert (f.icon, f.color) == ("people", "purple")
+    assert store.set_folder_style(1, f.id, "star", None).color is None
+    with pytest.raises(ValueError):
+        store.set_folder_style(1, f.id, "skull", None)
+    with pytest.raises(ValueError):
+        store.set_folder_style(1, f.id, None, "neon")
+    assert store.set_folder_style(1, f.id, None, None).icon is None
+    assert store.set_folder_style(2, f.id, "star", None) is None  # other guild: no effect
+    assert store.folders(1)[0].icon is None
+
+
+def test_adds_style_columns_to_v2_database(tmp_path):
+    path = str(tmp_path / "v2.db")
+    db = sqlite3.connect(path)
+    db.executescript("""
+        CREATE TABLE folders (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL,
+            name TEXT NOT NULL COLLATE NOCASE, UNIQUE (guild_id, name));
+        CREATE TABLE notes (guild_id INTEGER NOT NULL, id INTEGER NOT NULL, text TEXT NOT NULL,
+            folder_id INTEGER NOT NULL, done INTEGER NOT NULL DEFAULT 0, created_by INTEGER NOT NULL,
+            created_at INTEGER NOT NULL, done_by INTEGER, done_at INTEGER, PRIMARY KEY (guild_id, id));
+        CREATE TABLE counters (guild_id INTEGER PRIMARY KEY, next_id INTEGER NOT NULL);
+        INSERT INTO folders (guild_id, name) VALUES (1, 'Old folder');
+    """)
+    db.commit()
+    db.close()
+    s = NoteStore(path)
+    f = s.folders(1)[0]
+    assert (f.name, f.icon, f.color) == ("Old folder", None, None)
+    assert s.set_folder_style(1, f.id, "flag", "teal").icon == "flag"
+    s.close()
+    NoteStore(path).close()

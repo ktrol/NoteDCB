@@ -35,3 +35,14 @@ def test_wrap_limits_lines_and_ellipsizes():
     assert wrap(f, "short", 400) == ["short"]
     assert all(f.getlength(l) <= 400 for l in wrap(f, "x" * 300, 400))
     assert wrap(f, "", 400) == [""]
+
+
+def test_every_icon_and_color_renders_and_is_covered():
+    from notebot.card import COLORS
+    from notebot.store import COLOR_KEYS, ICON_KEYS
+    assert set(COLORS) == set(COLOR_KEYS)
+    rows = [FolderRow(k, 1, 2, k, COLOR_KEYS[i % len(COLOR_KEYS)]) for i, k in enumerate(ICON_KEYS)]
+    _png(Card("All icons", "", 0, 0, rows))
+    for k in ICON_KEYS:
+        _png(Card("Header", "", 0, 0, [TaskRow("x")], icon=k, color="blue"))
+    _png(Card("Unknown falls back", "", 0, 0, [FolderRow("a", 0, 0, "nope", "nope")]))

@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import functools
 import io
+import math
 from dataclasses import dataclass, field
-from typing import Union
+from typing import Optional, Union
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
@@ -30,6 +31,13 @@ MUTED = (170, 198, 195)
 INK = (10, 40, 48)
 
 
+COLORS = {
+    "gold": (242, 190, 80), "teal": (94, 196, 170), "blue": (105, 165, 245),
+    "purple": (178, 140, 235), "pink": (242, 135, 185), "red": (236, 100, 100),
+    "orange": (246, 152, 72), "green": (135, 205, 105), "grey": (178, 188, 198),
+}
+
+
 @dataclass
 class TaskRow:
     text: str
@@ -41,6 +49,8 @@ class FolderRow:
     name: str
     done: int = 0
     total: int = 0
+    icon: Optional[str] = None
+    color: Optional[str] = None
 
 
 @dataclass
@@ -52,6 +62,8 @@ class Card:
     rows: list[Union[TaskRow, FolderRow]] = field(default_factory=list)
     empty_text: str = "Nothing here yet"
     show_progress: bool = True
+    icon: Optional[str] = None   # header icon key (None = no header icon)
+    color: Optional[str] = None
 
 
 def P(v: float) -> int:
@@ -124,9 +136,59 @@ def _gradient(size, top, bottom) -> Image.Image:
     return img
 
 
-def _folder_icon(d: ImageDraw.ImageDraw, x: float, y: float, s: float, fill) -> None:
-    d.rounded_rectangle((P(x), P(y + s * 0.18), P(x + s * 0.42), P(y + s * 0.5)), P(3), fill=fill)
-    d.rounded_rectangle((P(x), P(y + s * 0.3), P(x + s), P(y + s * 0.92)), P(5), fill=fill)
+def _shade(c, k: float):
+    return tuple(max(0, min(255, round(v * k))) for v in c)
+
+
+def draw_icon(d: ImageDraw.ImageDraw, key: Optional[str], x: float, y: float, sz: float,
+              color: Optional[str] = None) -> None:
+    """Draw a flat vector icon in a sz x sz box at (x, y) (logical px)."""
+    c = COLORS.get(color or "gold", COLORS["gold"])
+    dark = _shade(c, 0.55)
+    e = lambda x0, y0, x1, y1: (P(x + x0 * sz), P(y + y0 * sz), P(x + x1 * sz), P(y + y1 * sz))
+    pt = lambda px, py: (P(x + px * sz), P(y + py * sz))
+    key = key or "folder"
+    if key == "folder":
+        d.rounded_rectangle(e(0, .18, .42, .5), P(3), fill=c)
+        d.rounded_rectangle(e(0, .3, 1, .92), P(5), fill=c)
+    elif key == "star":
+        pts = []
+        for i in range(10):
+            r = .52 if i % 2 == 0 else .23
+            ang = -math.pi / 2 + i * math.pi / 5
+            pts.append(pt(.5 + r * math.cos(ang) * 1.0, .53 + r * math.sin(ang) * 1.0))
+        d.polygon(pts, fill=c)
+    elif key == "flag":
+        d.rounded_rectangle(e(.12, .06, .22, .96), P(2), fill=dark)
+        d.polygon([pt(.22, .1), pt(.92, .1), pt(.74, .36), pt(.92, .62), pt(.22, .62)], fill=c)
+    elif key == "people":
+        d.ellipse(e(.50, .12, .78, .40), fill=dark)
+        d.rounded_rectangle(e(.40, .46, .90, .90), P(8), fill=dark)
+        d.ellipse(e(.18, .10, .50, .42), fill=c)
+        d.rounded_rectangle(e(.06, .48, .62, .94), P(9), fill=c)
+    elif key == "calendar":
+        d.rounded_rectangle(e(.04, .14, .96, .94), P(6), fill=c)
+        d.rounded_rectangle(e(.04, .14, .96, .40), P(6), fill=dark)
+        d.rectangle(e(.04, .30, .96, .40), fill=dark)
+        for rx in (.28, .72):
+            d.rounded_rectangle(e(rx - .06, .02, rx + .06, .26), P(2), fill=WHITE)
+        for gy in (.52, .72):
+            for gx in (.2, .44, .68):
+                d.rounded_rectangle(e(gx, gy, gx + .14, gy + .12), P(2), fill=dark)
+    elif key == "chat":
+        d.rounded_rectangle(e(.04, .1, .96, .72), P(8), fill=c)
+        d.polygon([pt(.2, .68), pt(.2, .95), pt(.46, .7)], fill=c)
+        for dx in (.28, .5, .72):
+            d.ellipse(e(dx - .06, .36, dx + .06, .48), fill=dark)
+    elif key == "target":
+        for r, col in ((.48, c), (.34, dark), (.21, c), (.09, dark)):
+            d.ellipse(e(.5 - r, .5 - r, .5 + r, .5 + r), fill=col)
+    elif key == "heart":
+        d.ellipse(e(.06, .12, .54, .6), fill=c)
+        d.ellipse(e(.46, .12, .94, .6), fill=c)
+        d.polygon([pt(.09, .46), pt(.91, .46), pt(.5, .94)], fill=c)
+    else:  # unknown key: plain folder
+        draw_icon(d, "folder", x, y, sz, color)
 
 
 def render_card(card: Card) -> bytes:
@@ -223,9 +285,13 @@ def render_card(card: Card) -> bytes:
 
     # ---- opaque drawing: text, fills, checks
     d = ImageDraw.Draw(img)
-    d.text((P(x0), P(M + 28)), _ellipsize(f_title, card.title, P(inner_w)), font=f_title, fill=WHITE)
+    head_x = x0
+    if card.icon:
+        draw_icon(d, card.icon, x0, M + 29, 34, card.color)
+        head_x = x0 + 48
+    d.text((P(head_x), P(M + 28)), _ellipsize(f_title, card.title, P(x1 - head_x)), font=f_title, fill=WHITE)
     if card.subtitle:
-        d.text((P(x0 + 2), P(M + 28 + 46)), _ellipsize(f_sub, card.subtitle, P(inner_w)),
+        d.text((P(head_x + 2), P(M + 28 + 46)), _ellipsize(f_sub, card.subtitle, P(x1 - head_x)),
                font=f_sub, fill=MUTED)
     if card.show_progress:
         frac = card.done / card.total if card.total else 0
@@ -255,7 +321,7 @@ def render_card(card: Card) -> bytes:
                     mid = P(ty + i * LINE_H + LINE_H / 2 + 2)
                     d.line((P(tx), mid, P(tx) + _width(f_text, line), mid), fill=MUTED, width=P(1.6))
         else:
-            _folder_icon(d, x0 + 1, cy + h / 2 - 12, 26, GOLD)
+            draw_icon(d, r.icon, x0 + 1, cy + h / 2 - 13, 26, r.color)
             name = _ellipsize(f_text, r.name, P(inner_w - text_x_off - 170))
             d.text((P(x0 + text_x_off), P(cy + h / 2)), name, font=f_text, fill=WHITE, anchor="lm")
             frac = r.done / r.total if r.total else 0

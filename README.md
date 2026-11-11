@@ -16,6 +16,7 @@ Notes live in **folders** (for example one per meeting). A folder holds a list o
 - **Open a folder** from the dropdown to see all its tasks and a progress bar.
 - **Tick tasks** in the dropdown to check them off. Untick to re-open.
 - **Add tasks** opens the notepad again, **Remove** deletes tasks, **Search** looks across every folder, **Rename** renames the folder.
+- **Style** (optional) gives a folder its own icon (folder, star, flag, people, calendar, chat, target, heart) and color (9 choices). Folders you don't style keep the default gold folder. **Reset to default** undoes it.
 - **Clear done** and **Delete folder** need the *Manage Messages* permission (delete asks for confirmation).
 
 Anyone in the channel can use the menu message at the same time. It stops responding after about 14 minutes, so just run `/notes` again.
