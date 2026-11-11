@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Iterable, Optional
 
 DEFAULT_FOLDER = "General"
-MAX_FOLDERS = 25          # fits in one Discord select menu
+MAX_FOLDERS = 200         # per server; the UI pages through them 25 at a time
 MAX_TASK_LEN = 500
 MAX_FOLDER_NAME = 40
 MAX_LINES_PER_ADD = 50

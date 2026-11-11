@@ -21,7 +21,7 @@ Notes live in **folders** (for example one per meeting). A folder holds a list o
 
 Anyone in the channel can use the menu message at the same time. It stops responding after about 14 minutes, so just run `/notes` again.
 
-Limits: 25 folders per server, 500 characters per task, 50 tasks per paste, 25 tasks per page.
+Limits: 200 folders per server (the folder list pages 25 at a time with ◀ ▶), 500 characters per task, 50 tasks per paste, 25 tasks per page.
 
 ## Setup
 

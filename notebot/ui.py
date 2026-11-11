@@ -185,6 +185,7 @@ class NotesView(discord.ui.View):
         self.store, self.guild_id = store, guild_id
         self.folder_id: Optional[int] = None
         self.page = 0
+        self.home_page = 0   # page of the folder list on the home screen
         self.mode = "view"   # view | remove | style | confirm_delete
         self.message: Optional[discord.Message] = None
         self._card: Optional[Card] = None
@@ -275,22 +276,27 @@ class NotesView(discord.ui.View):
 
     def _render_home(self) -> discord.Embed:
         folders = self.store.folders(self.guild_id)
+        pages = max(1, -(-len(folders) // PAGE))
+        self.home_page = min(max(self.home_page, 0), pages - 1)
+        shown = folders[self.home_page * PAGE:(self.home_page + 1) * PAGE]
         embed = discord.Embed(title="📋 Meeting notes", colour=ACCENT)
         if folders:
             embed.description = "\n".join(
                 f"{folder_emoji(f.icon)} **{clip(f.name, 40)}**  `{progress_bar(f.done, f.total, 8)}`  {f.done}/{f.total}"
-                for f in folders)
+                for f in shown)
             done = sum(f.done for f in folders)
             total = sum(f.total for f in folders)
-            embed.set_footer(text=f"{len(folders)} folder(s) • {done}/{total} tasks complete")
+            page_note = f" • Page {self.home_page + 1}/{pages}" if pages > 1 else ""
+            embed.set_footer(text=f"{len(folders)} folder(s) • {done}/{total} tasks complete{page_note}")
+            subtitle = f"{len(folders)} folder(s)" + (f" · page {self.home_page + 1} of {pages}" if pages > 1 else "")
             self._card = Card(
-                "Meeting notes", f"{len(folders)} folder(s)", done, total,
-                [FolderRow(f.name, f.done, f.total, f.icon, f.color) for f in folders])
+                "Meeting notes", subtitle, done, total,
+                [FolderRow(f.name, f.done, f.total, f.icon, f.color) for f in shown])
             self._select(
                 "Open a folder…",
                 [discord.SelectOption(label=clip(f.name, 100), value=str(f.id),
                                       description=f"{f.done}/{f.total} done", emoji=folder_emoji(f.icon))
-                 for f in folders],
+                 for f in shown],
                 row=0, cb=self._on_open_folder)
         else:
             embed.description = ("No folders yet.\n\nPress **New folder** to create one - "
@@ -301,6 +307,9 @@ class NotesView(discord.ui.View):
         self._button("New folder", self._on_new_folder, row=1,
                      style=discord.ButtonStyle.success, emoji="➕")
         self._button("Search", self._on_search, row=1, emoji="🔎")
+        if pages > 1:
+            self._button("", self._on_home_prev, row=1, emoji="◀️", disabled=self.home_page == 0)
+            self._button("", self._on_home_next, row=1, emoji="▶️", disabled=self.home_page >= pages - 1)
         return embed
 
     def _render_folder(self, folder: Folder) -> discord.Embed:
@@ -408,6 +417,14 @@ class NotesView(discord.ui.View):
 
     async def _on_search(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_modal(SearchModal(self.store, self.guild_id))
+
+    async def _on_home_prev(self, interaction: discord.Interaction) -> None:
+        self.home_page -= 1
+        await self.show(interaction)
+
+    async def _on_home_next(self, interaction: discord.Interaction) -> None:
+        self.home_page += 1
+        await self.show(interaction)
 
     async def _on_home(self, interaction: discord.Interaction) -> None:
         self.open_folder(None)
