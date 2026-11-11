@@ -10,7 +10,7 @@ Notes are stored per server in a local SQLite file. Each note gets a short ID (`
 
 Notes live in **folders** (for example one per meeting). A folder holds a list of **tasks**, and the whole folder is shown in one message.
 
-Run **`/notes`** to open the menu. Everything is buttons, dropdowns and pop-up forms, so there's nothing to memorise:
+`/notes` is the only command. Everything is buttons, dropdowns and pop-up forms, so there's nothing to memorise. The checklist is drawn as a frosted-glass card image (Discord's own buttons and menus can't be themed, so the glass look lives in that image):
 
 - **New folder** opens a notepad. Type or paste a list and press Enter between items, and each line becomes its own task (leading `-`, `*` and `[ ]` are cleaned up).
 - **Open a folder** from the dropdown to see all its tasks and a progress bar.
@@ -20,16 +20,7 @@ Run **`/notes`** to open the menu. Everything is buttons, dropdowns and pop-up f
 
 Anyone in the channel can use the menu message at the same time. It stops responding after about 14 minutes, so just run `/notes` again.
 
-### Typed shortcuts
-
-| Command | What it does |
-|---|---|
-| `/task add text [folder]` | Add one task (folder is created if new, default `General`) |
-| `/task check task` / `/task uncheck task` | Check off or re-open a task |
-| `/task remove task` | Delete a task |
-| `/task search query [status]` | Search tasks and folder names |
-
-Task and folder fields autocomplete. Limits: 25 folders per server, 500 characters per task, 50 tasks per paste.
+Limits: 25 folders per server, 500 characters per task, 50 tasks per paste, 25 tasks per page.
 
 ## Setup
 

@@ -7,13 +7,16 @@ use the same message at once.
 """
 from __future__ import annotations
 
+import asyncio
+import io
 import logging
 from typing import Awaitable, Callable, Optional
 
 import discord
 
+from .card import Card, FolderRow, TaskRow, render_card
 from .store import (
-    MAX_FOLDER_NAME, MAX_LINES_PER_ADD, MAX_TASK_LEN, Folder, FolderExistsError,
+    MAX_FOLDER_NAME, MAX_LINES_PER_ADD, Folder, FolderExistsError,
     FolderLimitError, Note, NoteStore, split_lines,
 )
 
@@ -167,19 +170,40 @@ class NotesView(discord.ui.View):
         self.page = 0
         self.mode = "view"   # view | remove | confirm_delete
         self.message: Optional[discord.Message] = None
+        self._card: Optional[Card] = None
 
     # -- navigation ----------------------------------------------------
     def open_folder(self, folder_id: Optional[int]) -> None:
         self.folder_id, self.page, self.mode = folder_id, 0, "view"
 
-    async def show(self, interaction: discord.Interaction) -> None:
+    async def _compose(self) -> tuple[discord.Embed, list[discord.File]]:
+        """Build the message body: a glass card image, or text if rendering fails."""
         embed = self.render()
-        await interaction.response.edit_message(embed=embed, view=self)
+        card = self._card
+        if card is None:
+            return embed, []
+        try:
+            png = await asyncio.to_thread(render_card, card)
+        except Exception:
+            log.exception("Card render failed; falling back to text")
+            return embed, []
+        alt = clip(embed.description or card.title, 1000)
+        file = discord.File(io.BytesIO(png), filename="notes.png", description=alt)
+        img_embed = discord.Embed(colour=embed.colour)
+        img_embed.set_image(url="attachment://notes.png")
+        if embed.footer.text:
+            img_embed.set_footer(text=embed.footer.text)
+        return img_embed, [file]
+
+    async def show(self, interaction: discord.Interaction) -> None:
+        embed, files = await self._compose()
+        await interaction.response.edit_message(embed=embed, attachments=files, view=self)
 
     async def start(self, interaction: discord.Interaction) -> None:
-        embed = self.render()
+        embed, files = await self._compose()
+        extra = {"files": files} if files else {}
         await interaction.response.send_message(
-            embed=embed, view=self, allowed_mentions=discord.AllowedMentions.none())
+            embed=embed, view=self, allowed_mentions=discord.AllowedMentions.none(), **extra)
         self.message = await interaction.original_response()
 
     async def on_timeout(self) -> None:
@@ -223,6 +247,7 @@ class NotesView(discord.ui.View):
     # -- rendering -----------------------------------------------------
     def render(self) -> discord.Embed:
         self.clear_items()
+        self._card = None
         if self.folder_id is None:
             return self._render_home()
         folder = self.store.get_folder(self.guild_id, self.folder_id)
@@ -241,6 +266,9 @@ class NotesView(discord.ui.View):
             done = sum(f.done for f in folders)
             total = sum(f.total for f in folders)
             embed.set_footer(text=f"{len(folders)} folder(s) • {done}/{total} tasks complete")
+            self._card = Card(
+                "Meeting notes", f"{len(folders)} folder(s)", done, total,
+                [FolderRow(f.name, f.done, f.total) for f in folders])
             self._select(
                 "Open a folder…",
                 [discord.SelectOption(label=clip(f.name, 100), value=str(f.id),
@@ -250,6 +278,9 @@ class NotesView(discord.ui.View):
         else:
             embed.description = ("No folders yet.\n\nPress **New folder** to create one - "
                                  "you can paste a whole list and each line becomes a task.")
+        if self._card is None:
+            self._card = Card("Meeting notes", "Paste a list and each line becomes a task", 0, 0, [],
+                              empty_text="No folders yet - press New folder", show_progress=False)
         self._button("New folder", self._on_new_folder, row=1,
                      style=discord.ButtonStyle.success, emoji="➕")
         self._button("Search", self._on_search, row=1, emoji="🔎")
@@ -283,6 +314,13 @@ class NotesView(discord.ui.View):
         hint = ("Pick tasks below to delete them" if removing
                 else "Tick tasks in the menu to check them off")
         embed.set_footer(text=f"Page {self.page + 1}/{pages} • {hint}")
+        self._card = Card(
+            ("Remove tasks · " if removing else "") + folder.name,
+            f"Page {self.page + 1} of {pages}" if pages > 1 else
+            f"{folder.done} of {folder.total} tasks complete",
+            folder.done, folder.total,
+            [TaskRow(n.text, n.done) for n in chunk],
+            empty_text="No tasks yet - press Add tasks")
 
         if removing:
             if chunk:
