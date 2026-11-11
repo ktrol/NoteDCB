@@ -6,19 +6,30 @@ A Discord bot that keeps a shared meeting checklist. Add notes during a meeting,
 
 Notes are stored per server in a local SQLite file. Each note gets a short ID (`#1`, `#2`, ...) and can optionally be tagged with a meeting name.
 
-## Commands
+## How it works
+
+Notes live in **folders** (for example one per meeting). A folder holds a list of **tasks**, and the whole folder is shown in one message.
+
+Run **`/notes`** to open the menu. Everything is buttons, dropdowns and pop-up forms, so there's nothing to memorise:
+
+- **New folder** opens a notepad. Type or paste a list and press Enter between items, and each line becomes its own task (leading `-`, `*` and `[ ]` are cleaned up).
+- **Open a folder** from the dropdown to see all its tasks and a progress bar.
+- **Tick tasks** in the dropdown to check them off. Untick to re-open.
+- **Add tasks** opens the notepad again, **Remove** deletes tasks, **Search** looks across every folder, **Rename** renames the folder.
+- **Clear done** and **Delete folder** need the *Manage Messages* permission (delete asks for confirmation).
+
+Anyone in the channel can use the menu message at the same time. It stops responding after about 14 minutes, so just run `/notes` again.
+
+### Typed shortcuts
 
 | Command | What it does |
 |---|---|
-| `/note add text [meeting]` | Add a note, optionally tagged with a meeting |
-| `/note list [status] [meeting]` | Show the checklist with a progress bar (All / Open / Done) |
-| `/note check note` | Check a note off |
-| `/note uncheck note` | Re-open a completed note |
-| `/note remove note` | Delete a note |
-| `/note search query [status]` | Search note text and meeting names |
-| `/note clear-done [meeting]` | Delete completed notes (requires Manage Messages) |
+| `/task add text [folder]` | Add one task (folder is created if new, default `General`) |
+| `/task check task` / `/task uncheck task` | Check off or re-open a task |
+| `/task remove task` | Delete a task |
+| `/task search query [status]` | Search tasks and folder names |
 
-The `note` and `meeting` fields autocomplete from existing notes.
+Task and folder fields autocomplete. Limits: 25 folders per server, 500 characters per task, 50 tasks per paste.
 
 ## Setup
 
