@@ -2,13 +2,16 @@ import io
 
 from PIL import Image
 
-from notebot.card import Card, FolderRow, TaskRow, font, render_card, wrap
+from notebot.card import Card, FolderRow, S, TaskRow, W, font, render_card, wrap
 
 
 def _png(card):
     data = render_card(card)
     img = Image.open(io.BytesIO(data))
-    assert img.format == "PNG" and img.width == 720
+    assert img.format == "PNG" and img.width == W * S and img.mode == "RGBA"
+    assert img.getpixel((0, 0))[3] == 0          # no backdrop: corners are transparent
+    cx = img.width // 2
+    assert img.getpixel((cx, img.height // 2))[3] > 100   # the glass panel is there
     return img
 
 
@@ -23,9 +26,13 @@ def test_folder_and_empty_cards_render():
     _png(Card("Empty", "", 0, 0, [], empty_text="Nothing", show_progress=False))
 
 
-def test_full_page_is_reasonable_size():
-    img = _png(Card("Big", "", 0, 25, [TaskRow("word " * 200) for _ in range(25)]))
-    assert img.height < 4000
+def test_full_page_keeps_a_readable_aspect_ratio():
+    # 8 rows is one page; even if every task wraps to two lines the card must stay
+    # close to the display box Discord uses (about 550x400), not a tall strip
+    img = _png(Card("Big", "", 0, 8, [TaskRow("word " * 200) for _ in range(8)]))
+    assert img.height / img.width < 1.2
+    one_line = _png(Card("Big", "", 0, 8, [TaskRow("short") for _ in range(8)]))
+    assert one_line.height / one_line.width < 0.85
 
 
 def test_wrap_limits_lines_and_ellipsizes():

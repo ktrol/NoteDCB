@@ -24,7 +24,8 @@ log = logging.getLogger("notedcb.ui")
 
 ACCENT = discord.Colour.from_rgb(46, 125, 110)
 WARN = discord.Colour.from_rgb(190, 70, 60)
-PAGE = 25            # tasks per page (a select menu holds at most 25 options)
+TASK_PAGE = 8        # tasks per card: more would shrink the picture below readable size
+FOLDER_PAGE = 10     # folders per card (a select menu holds at most 25)
 VIEW_TIMEOUT = 840   # seconds; interaction tokens expire after 15 minutes
 
 Callback = Callable[[discord.Interaction], Awaitable[None]]
@@ -194,34 +195,40 @@ class NotesView(discord.ui.View):
     def open_folder(self, folder_id: Optional[int]) -> None:
         self.folder_id, self.page, self.mode = folder_id, 0, "view"
 
-    async def _compose(self) -> tuple[discord.Embed, list[discord.File]]:
-        """Build the message body: a glass card image, or text if rendering fails."""
+    async def _compose(self) -> dict:
+        """Build the message body.
+
+        Normally the glass card is sent as a plain attachment (Discord displays
+        those larger than embed images) with a one-line hint above it. If the
+        image can't be rendered, fall back to a text embed.
+        """
         embed = self.render()
         card = self._card
-        if card is None:
-            return embed, []
-        try:
-            png = await asyncio.to_thread(render_card, card)
-        except Exception:
-            log.exception("Card render failed; falling back to text")
-            return embed, []
-        alt = clip(embed.description or card.title, 1000)
-        file = discord.File(io.BytesIO(png), filename="notes.png", description=alt)
-        img_embed = discord.Embed(colour=embed.colour)
-        img_embed.set_image(url="attachment://notes.png")
-        if embed.footer.text:
-            img_embed.set_footer(text=embed.footer.text)
-        return img_embed, [file]
+        if card is not None:
+            try:
+                png = await asyncio.to_thread(render_card, card)
+            except Exception:
+                log.exception("Card render failed; falling back to text")
+            else:
+                alt = clip(embed.description or card.title, 1000)
+                file = discord.File(io.BytesIO(png), filename="notes.png", description=alt)
+                hint = embed.footer.text
+                return {"content": f"-# {hint}" if hint else None, "embed": None, "attachments": [file]}
+        return {"content": None, "embed": embed, "attachments": []}
 
     async def show(self, interaction: discord.Interaction) -> None:
-        embed, files = await self._compose()
-        await interaction.response.edit_message(embed=embed, attachments=files, view=self)
+        await interaction.response.edit_message(**await self._compose(), view=self)
 
     async def start(self, interaction: discord.Interaction) -> None:
-        embed, files = await self._compose()
-        extra = {"files": files} if files else {}
-        await interaction.response.send_message(
-            embed=embed, view=self, allowed_mentions=discord.AllowedMentions.none(), **extra)
+        body = await self._compose()
+        kwargs = {"view": self, "allowed_mentions": discord.AllowedMentions.none()}
+        if body["content"]:
+            kwargs["content"] = body["content"]
+        if body["embed"] is not None:
+            kwargs["embed"] = body["embed"]
+        if body["attachments"]:
+            kwargs["files"] = body["attachments"]
+        await interaction.response.send_message(**kwargs)
         self.message = await interaction.original_response()
 
     async def on_timeout(self) -> None:
@@ -276,9 +283,9 @@ class NotesView(discord.ui.View):
 
     def _render_home(self) -> discord.Embed:
         folders = self.store.folders(self.guild_id)
-        pages = max(1, -(-len(folders) // PAGE))
+        pages = max(1, -(-len(folders) // FOLDER_PAGE))
         self.home_page = min(max(self.home_page, 0), pages - 1)
-        shown = folders[self.home_page * PAGE:(self.home_page + 1) * PAGE]
+        shown = folders[self.home_page * FOLDER_PAGE:(self.home_page + 1) * FOLDER_PAGE]
         embed = discord.Embed(title="📋 Meeting notes", colour=ACCENT)
         if folders:
             embed.description = "\n".join(
@@ -314,9 +321,9 @@ class NotesView(discord.ui.View):
 
     def _render_folder(self, folder: Folder) -> discord.Embed:
         tasks = self.store.list(self.guild_id, "all", folder.id)
-        pages = max(1, -(-len(tasks) // PAGE))
+        pages = max(1, -(-len(tasks) // TASK_PAGE))
         self.page = min(max(self.page, 0), pages - 1)
-        chunk = tasks[self.page * PAGE:(self.page + 1) * PAGE]
+        chunk = tasks[self.page * TASK_PAGE:(self.page + 1) * TASK_PAGE]
 
         if self.mode == "confirm_delete":
             embed = discord.Embed(
@@ -454,7 +461,7 @@ class NotesView(discord.ui.View):
 
     async def _on_check_select(self, interaction: discord.Interaction, values: list[str]) -> None:
         tasks = self.store.list(self.guild_id, "all", self.folder_id)
-        chunk = tasks[self.page * PAGE:(self.page + 1) * PAGE]
+        chunk = tasks[self.page * TASK_PAGE:(self.page + 1) * TASK_PAGE]
         chosen = {int(v) for v in values}
         self.store.set_many_done(
             self.guild_id,

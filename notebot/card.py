@@ -1,7 +1,9 @@
-"""Render the checklist as a frosted-glass card (PNG).
+"""Render the checklist as a glass card (transparent PNG, no backdrop).
 
 Discord draws its own buttons and menus and can't be themed, so the "glass"
-look lives in this image, which is shown inside the message embed.
+look lives in this image, which is sent as the message's attachment.
+The card is sized for Discord's image display box (about 550x400), so only
+a handful of rows fit per card; the UI pages through the rest.
 Needs Pillow. Uses Segoe UI on Windows and falls back to DejaVu/Arial.
 """
 from __future__ import annotations
@@ -14,11 +16,11 @@ from typing import Optional, Union
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-S = 2            # supersampling; the final image is downscaled for smooth edges
-W = 720          # final width in px
-M = 20           # outer margin around the glass panel
-PAD = 30         # padding inside the panel
-LINE_H = 28
+S = 2            # rendered at 2x so it stays sharp on high-DPI screens
+W = 520          # logical width; the PNG is W*S px wide
+M = 8            # outer margin around the glass panel
+PAD = 18         # padding inside the panel
+LINE_H = 21
 MAX_LINES = 2
 
 BG_TOP = (10, 40, 48)
@@ -192,11 +194,11 @@ def draw_icon(d: ImageDraw.ImageDraw, key: Optional[str], x: float, y: float, sz
 
 
 def render_card(card: Card) -> bytes:
-    f_title, f_sub = font(34, True), font(19)
-    f_text, f_small = font(22), font(18, True)
+    f_title, f_sub = font(24, True), font(14)
+    f_text, f_small = font(17), font(14, True)
 
     inner_w = W - 2 * M - 2 * PAD
-    text_x_off = 30 + 16  # checkbox + gap
+    text_x_off = 34                      # checkbox + gap
     text_w = P(inner_w - text_x_off)
 
     # ---- layout pass: row heights
@@ -204,134 +206,125 @@ def render_card(card: Card) -> bytes:
     for r in card.rows:
         if isinstance(r, TaskRow):
             lines = wrap(f_text, r.text, text_w)
-            laid.append((r, lines, max(52, 24 + LINE_H * len(lines))))
+            laid.append((r, lines, max(34, 14 + LINE_H * len(lines))))
         else:
-            laid.append((r, [], 58))
-    rows_h = sum(h for _, _, h in laid) or 70
+            laid.append((r, [], 32))
+    rows_h = sum(h for _, _, h in laid) or 56
 
-    head_h = 28 + 40 + (26 if card.subtitle else 0)
-    bar_h = 16 + 26 if card.show_progress else 8
-    H = M + head_h + bar_h + 18 + 2 + 10 + rows_h + 20 + M
+    top = M + 16
+    bar_y = top + 38
+    div_y = bar_y + 8 + 14 if card.show_progress else top + 40
+    row_top = div_y + 6
+    H = row_top + rows_h + 14 + M
     size = (P(W), P(H))
+    x0, x1 = M + PAD, W - M - PAD
 
-    # ---- background with a few hard-edged shapes so the frosting is visible
-    bg = _gradient(size, BG_TOP, BG_BOTTOM)
-    shapes = Image.new("RGBA", size, (0, 0, 0, 0))
-    sd = ImageDraw.Draw(shapes)
-    sd.ellipse((P(W * 0.55), P(-60), P(W * 1.15), P(190)), fill=(*TEAL, 120))
-    sd.ellipse((P(-90), P(H * 0.35), P(130), P(H * 0.35 + 220)), fill=(*BLUE, 105))
-    sd.ellipse((P(W * 0.6), P(H - 170), P(W * 1.05), P(H + 40)), fill=(*GOLD, 85))
-    bg.alpha_composite(shapes)
-
-    # ---- glass panel
+    # ---- transparent canvas + glass panel (no backdrop)
+    img = Image.new("RGBA", size, (0, 0, 0, 0))
     box = (P(M), P(M), P(W - M), P(H - M))
-    radius = P(30)
+    radius = P(20)
     mask = Image.new("L", size, 0)
     ImageDraw.Draw(mask).rounded_rectangle(box, radius, fill=255)
+    zero = Image.new("L", size, 0)
 
     shadow = Image.new("RGBA", size, (0, 0, 0, 0))
     ImageDraw.Draw(shadow).rounded_rectangle(
-        (box[0], box[1] + P(8), box[2], box[3] + P(8)), radius, fill=(0, 0, 0, 110))
-    img = bg.copy()
-    img.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(P(14))))
+        (box[0], box[1] + P(3), box[2], box[3] + P(3)), radius, fill=(0, 0, 0, 90))
+    img.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(P(4))))
 
-    frosted = img.filter(ImageFilter.GaussianBlur(P(16)))
-    img.paste(frosted, mask=mask)
+    # smoky glass body: translucent dark teal that stays readable on any theme
+    body = Image.new("RGBA", size, (0, 0, 0, 0))
+    bd = ImageDraw.Draw(body)
+    top_y, bot_y = box[1], box[3]
+    for y in range(top_y, bot_y):
+        t = (y - top_y) / max(1, bot_y - top_y)
+        bd.line((box[0], y, box[2], y),
+                fill=(round(26 - 12 * t), round(56 - 24 * t), round(64 - 24 * t), round(172 + 30 * t)))
+    body.putalpha(Image.composite(body.getchannel("A"), zero, mask))
+    img.alpha_composite(body)
 
-    tint = Image.new("RGBA", size, (255, 255, 255, 30))
-    img.paste(Image.alpha_composite(img, tint), mask=mask)
-
-    hl = Image.new("RGBA", size, (0, 0, 0, 0))
-    hd = ImageDraw.Draw(hl)
-    span = int((box[3] - box[1]) * 0.45)
+    # light sheen across the top, like light catching the glass
+    sheen = Image.new("RGBA", size, (0, 0, 0, 0))
+    sd = ImageDraw.Draw(sheen)
+    span = int((box[3] - box[1]) * 0.5)
     for k in range(span):
-        a = round(46 * (1 - k / span) ** 2)
-        hd.line((box[0], box[1] + k, box[2], box[1] + k), fill=(255, 255, 255, a))
-    hl.putalpha(Image.composite(hl.getchannel("A"), Image.new("L", size, 0), mask))
-    img.alpha_composite(hl)
+        sd.line((box[0], box[1] + k, box[2], box[1] + k),
+                fill=(255, 255, 255, round(54 * (1 - k / span) ** 2)))
+    sheen.putalpha(Image.composite(sheen.getchannel("A"), zero, mask))
+    img.alpha_composite(sheen)
 
     border = Image.new("RGBA", size, (0, 0, 0, 0))
-    ImageDraw.Draw(border).rounded_rectangle(box, radius, outline=(255, 255, 255, 85), width=P(2))
+    ImageDraw.Draw(border).rounded_rectangle(box, radius, outline=(255, 255, 255, 95), width=P(1.5))
     img.alpha_composite(border)
 
-    # ---- translucent details (tracks, dividers, checkbox outlines) on one layer
+    # ---- translucent details (tracks, dividers, checkbox outlines)
     glass = Image.new("RGBA", size, (0, 0, 0, 0))
     gd = ImageDraw.Draw(glass)
-    x0 = M + PAD
-    x1 = W - M - PAD
-    y = M + 28 + 40 + (26 if card.subtitle else 0) + 16
-    bar_y = y
     if card.show_progress:
-        gd.rounded_rectangle((P(x0), P(bar_y), P(x1 - 70), P(bar_y + 12)), P(6), fill=(255, 255, 255, 55))
-    y += 26 if card.show_progress else 0
-    div_y = y + 18
-    gd.rectangle((P(x0), P(div_y), P(x1), P(div_y) + P(1)), fill=(255, 255, 255, 60))
-    row_top = div_y + 10
-
+        gd.rounded_rectangle((P(x0), P(bar_y), P(x1 - 46), P(bar_y + 8)), P(4), fill=(255, 255, 255, 60))
+    gd.rectangle((P(x0), P(div_y), P(x1), P(div_y) + P(1)), fill=(255, 255, 255, 65))
     cy = row_top
     for r, lines, h in laid:
         if isinstance(r, TaskRow):
             if not r.done:
-                gd.rounded_rectangle((P(x0), P(cy + (h - 28) / 2), P(x0 + 28), P(cy + (h - 28) / 2 + 28)),
-                                     P(8), outline=(255, 255, 255, 175), width=P(2.2),
-                                     fill=(255, 255, 255, 22))
+                by = cy + (h - 20) / 2
+                gd.rounded_rectangle((P(x0), P(by), P(x0 + 20), P(by + 20)), P(6),
+                                     outline=(255, 255, 255, 190), width=P(1.8),
+                                     fill=(255, 255, 255, 24))
         else:
-            tx1 = x1
-            gd.rounded_rectangle((P(tx1 - 150), P(cy + h / 2 - 6), P(tx1 - 52), P(cy + h / 2 + 6)),
-                                 P(6), fill=(255, 255, 255, 55))
+            gd.rounded_rectangle((P(x1 - 124), P(cy + h / 2 - 4), P(x1 - 44), P(cy + h / 2 + 4)),
+                                 P(4), fill=(255, 255, 255, 60))
         cy += h
-        gd.rectangle((P(x0 + text_x_off - 2), P(cy), P(x1), P(cy) + P(1)), fill=(255, 255, 255, 22))
+        gd.rectangle((P(x0 + text_x_off - 2), P(cy), P(x1), P(cy) + P(1)), fill=(255, 255, 255, 26))
     img.alpha_composite(glass)
 
     # ---- opaque drawing: text, fills, checks
     d = ImageDraw.Draw(img)
     head_x = x0
     if card.icon:
-        draw_icon(d, card.icon, x0, M + 29, 34, card.color)
-        head_x = x0 + 48
-    d.text((P(head_x), P(M + 28)), _ellipsize(f_title, card.title, P(x1 - head_x)), font=f_title, fill=WHITE)
+        draw_icon(d, card.icon, x0, top + 2, 26, card.color)
+        head_x = x0 + 34
+    sub_w = _width(f_sub, card.subtitle) if card.subtitle else 0
+    title_max = P(x1 - head_x) - (sub_w + P(12) if card.subtitle else 0)
+    d.text((P(head_x), P(top)), _ellipsize(f_title, card.title, title_max), font=f_title, fill=WHITE)
     if card.subtitle:
-        d.text((P(head_x + 2), P(M + 28 + 46)), _ellipsize(f_sub, card.subtitle, P(x1 - head_x)),
-               font=f_sub, fill=MUTED)
+        d.text((P(x1), P(top + 17)), card.subtitle, font=f_sub, fill=MUTED, anchor="rm")
     if card.show_progress:
         frac = card.done / card.total if card.total else 0
-        track_w = (x1 - 70) - x0
+        track_w = (x1 - 46) - x0
         if frac > 0:
-            d.rounded_rectangle((P(x0), P(bar_y), P(x0 + max(12, track_w * frac)), P(bar_y + 12)),
-                                P(6), fill=TEAL)
-        pct = f"{round(frac * 100)}%"
-        d.text((P(x1), P(bar_y + 6)), pct, font=f_small, fill=WHITE, anchor="rm")
+            d.rounded_rectangle((P(x0), P(bar_y), P(x0 + max(8, track_w * frac)), P(bar_y + 8)),
+                                P(4), fill=TEAL)
+        d.text((P(x1), P(bar_y + 4)), f"{round(frac * 100)}%", font=f_small, fill=WHITE, anchor="rm")
 
     cy = row_top
     if not laid:
-        d.text((P((x0 + x1) / 2), P(cy + 35)), card.empty_text, font=f_text, fill=MUTED, anchor="mm")
+        d.text((P((x0 + x1) / 2), P(cy + 28)), card.empty_text, font=f_text, fill=MUTED, anchor="mm")
     for r, lines, h in laid:
         if isinstance(r, TaskRow):
-            bx, by = x0, cy + (h - 28) / 2
+            bx, by = x0, cy + (h - 20) / 2
             if r.done:
-                d.rounded_rectangle((P(bx), P(by), P(bx + 28), P(by + 28)), P(8), fill=TEAL)
-                d.line([(P(bx + 7), P(by + 15)), (P(bx + 12.5), P(by + 20)), (P(bx + 21.5), P(by + 8.5))],
-                       fill=INK, width=P(3.2), joint="curve")
+                d.rounded_rectangle((P(bx), P(by), P(bx + 20), P(by + 20)), P(6), fill=TEAL)
+                d.line([(P(bx + 5), P(by + 10.5)), (P(bx + 8.8), P(by + 14.2)), (P(bx + 15.2), P(by + 6))],
+                       fill=INK, width=P(2.4), joint="curve")
             ty = cy + (h - LINE_H * len(lines)) / 2
+            tx = x0 + text_x_off
             for i, line in enumerate(lines):
-                color = MUTED if r.done else WHITE
-                tx = x0 + text_x_off
-                d.text((P(tx), P(ty + i * LINE_H) + P(1)), line, font=f_text, fill=color)
+                d.text((P(tx), P(ty + i * LINE_H)), line, font=f_text, fill=MUTED if r.done else WHITE)
                 if r.done:
-                    mid = P(ty + i * LINE_H + LINE_H / 2 + 2)
-                    d.line((P(tx), mid, P(tx) + _width(f_text, line), mid), fill=MUTED, width=P(1.6))
+                    mid = P(ty + i * LINE_H + LINE_H / 2 + 1)
+                    d.line((P(tx), mid, P(tx) + _width(f_text, line), mid), fill=MUTED, width=P(1.3))
         else:
-            draw_icon(d, r.icon, x0 + 1, cy + h / 2 - 13, 26, r.color)
-            name = _ellipsize(f_text, r.name, P(inner_w - text_x_off - 170))
+            draw_icon(d, r.icon, x0, cy + h / 2 - 11, 22, r.color)
+            name = _ellipsize(f_text, r.name, P(inner_w - text_x_off - 130))
             d.text((P(x0 + text_x_off), P(cy + h / 2)), name, font=f_text, fill=WHITE, anchor="lm")
             frac = r.done / r.total if r.total else 0
             if frac > 0:
-                d.rounded_rectangle((P(x1 - 150), P(cy + h / 2 - 6),
-                                     P(x1 - 150 + max(12, 98 * frac)), P(cy + h / 2 + 6)), P(6), fill=TEAL)
+                d.rounded_rectangle((P(x1 - 124), P(cy + h / 2 - 4),
+                                     P(x1 - 124 + max(8, 80 * frac)), P(cy + h / 2 + 4)), P(4), fill=TEAL)
             d.text((P(x1), P(cy + h / 2)), f"{r.done}/{r.total}", font=f_small, fill=MUTED, anchor="rm")
         cy += h
 
-    out = img.convert("RGB").resize((W, H), Image.LANCZOS)
     buf = io.BytesIO()
-    out.save(buf, "PNG", optimize=True)
+    img.save(buf, "PNG", optimize=True)
     return buf.getvalue()
